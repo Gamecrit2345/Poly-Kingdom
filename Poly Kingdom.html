@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="fil">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tribes of Malaya - Kingdom Builder</title>
+    <style>
+        body { margin:0; font-family:Arial; background:#0a1f0a; color:#ddd; overflow:hidden; }
+        #game-container { display:flex; height:100vh; }
+        canvas { background:#1a3a1a; image-rendering:pixelated; }
+        #ui { width:300px; background:rgba(10,30,10,0.95); padding:15px; overflow-y:auto; border-left:3px solid #555; }
+        .res { display:flex; justify-content:space-between; background:#112211; padding:8px; margin:8px 0; border-radius:5px; }
+        button { width:100%; padding:12px; margin:6px 0; background:#224422; color:#ffdd88; border:1px solid #446644; border-radius:5px; cursor:pointer; }
+        button:hover { background:#336633; }
+        #log { height:180px; overflow-y:auto; background:#0f1f0f; padding:10px; font-size:13px; margin-top:15px; border-radius:5px; }
+        h1 { color:#ffcc66; text-align:center; margin:0 0 15px 0; text-shadow:0 0 8px #ffaa00; }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="canvas" width="900" height="600"></canvas>
+        <div id="ui">
+            <h1>🌴 Tribes of Malaya</h1>
+            
+            <div class="res"><span>🍚 Pagkain:</span> <span id="food">800</span></div>
+            <div class="res"><span>🪵 Kahoy:</span> <span id="wood">600</span></div>
+            <div class="res"><span>🪨 Bato:</span> <span id="stone">400</span></div>
+            <div class="res"><span>💎 Ginto:</span> <span id="gold">250</span></div>
+
+            <h3>🏗️ Mga Gusali</h3>
+            <button onclick="startPlacing('house')">🏠 Bahay - 80 Pagkain</button>
+            <button onclick="startPlacing('farm')">🌾 Bukid - 120 Pagkain</button>
+            <button onclick="startPlacing('townhall')">🏛️ Pamayanan - 200 Bato</button>
+            <button onclick="startPlacing('barracks')">🛡️ Kuta - 180 Kahoy</button>
+
+            <h3>⚔️ Tropa</h3>
+            <button onclick="trainTroops(8)">👥 Train 8 Mandirigma (80 Pagkain)</button>
+            <button onclick="attackBarbarians()">🏹 Salakayin ang mga Barbarian</button>
+
+            <div id="log"></div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        let resources = { food: 800, wood: 600, stone: 400, gold: 250 };
+        let buildings = [];
+        let troops = 15;
+        let placing = null;
+        
+        const GRID = 45;
+        const WORLD_W = 60;
+        const WORLD_H = 45;
+        
+        let cameraX = 400, cameraY = 300;
+        let isDragging = false, lastX, lastY;
+        
+        let map = Array(WORLD_H).fill().map(() => Array(WORLD_W).fill(0)); // 0=grass, 1=tree
+        
+        // Generate trees
+        for (let i = 0; i < 450; i++) {
+            map[Math.floor(Math.random()*WORLD_H)][Math.floor(Math.random()*WORLD_W)] = 1;
+        }
+
+        function updateUI() {
+            document.getElementById('food').textContent = Math.floor(resources.food);
+            document.getElementById('wood').textContent = Math.floor(resources.wood);
+            document.getElementById('stone').textContent = Math.floor(resources.stone);
+            document.getElementById('gold').textContent = Math.floor(resources.gold);
+        }
+
+        function log(msg) {
+            const l = document.getElementById('log');
+            l.innerHTML += `<div>${msg}</div>`;
+            l.scrollTop = l.scrollHeight;
+        }
+
+        function draw() {
+            ctx.fillStyle = '#0f2a0f';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            const startX = Math.floor(cameraX / GRID);
+            const startY = Math.floor(cameraY / GRID);
+            const endX = Math.ceil((cameraX + canvas.width) / GRID);
+            const endY = Math.ceil((cameraY + canvas.height) / GRID);
+
+            // Trees & Ground
+            for (let y = Math.max(0, startY); y < Math.min(WORLD_H, endY); y++) {
+                for (let x = Math.max(0, startX); x < Math.min(WORLD_W, endX); x++) {
+                    const sx = x * GRID - cameraX;
+                    const sy = y * GRID - cameraY;
+                    if (map[y][x] === 1) {
+                        ctx.fillStyle = '#0a1f0a';
+                        ctx.fillRect(sx+6, sy+6, GRID-12, GRID-12);
+                        ctx.fillStyle = '#1a5';
+                        ctx.beginPath();
+                        ctx.arc(sx + GRID/2, sy + GRID/3, 16, 0, Math.PI*2);
+                        ctx.fill();
+                    }
+                }
+            }
+
+            // Buildings
+            buildings.forEach(b => {
+                const sx = b.x * GRID - cameraX;
+                const sy = b.y * GRID - cameraY;
+                if (sx < -GRID || sx > canvas.width || sy < -GRID || sy > canvas.height) return;
+
+                if (b.type === 'farm') {
+                    ctx.fillStyle = '#8b5'; ctx.fillRect(sx+5, sy+5, GRID-10, GRID-10);
+                    ctx.fillStyle = '#ff0'; ctx.fillRect(sx+12, sy+12, 15, 15);
+                } else if (b.type === 'barracks') {
+                    ctx.fillStyle = '#444'; ctx.fillRect(sx+4, sy+4, GRID-8, GRID-8);
+                    ctx.fillStyle = '#c33'; ctx.fillRect(sx+12, sy+12, GRID-24, GRID-24);
+                } else if (b.type === 'townhall') {
+                    ctx.fillStyle = '#cb8'; ctx.fillRect(sx+3, sy+3, GRID-6, GRID-6);
+                    ctx.fillStyle = '#ff0'; ctx.fillRect(sx+15, sy+10, GRID-30, 12);
+                } else if (b.type === 'house') {
+                    ctx.fillStyle = '#a95'; ctx.fillRect(sx+6, sy+8, GRID-12, GRID-16);
+                }
+            });
+
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 20px Arial';
+            ctx.fillText(`👥 ${troops} Mandirigma`, 20, 40);
+        }
+
+        function gameLoop() {
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Drag Map
+        canvas.addEventListener('mousedown', e => {
+            if (placing) return;
+            isDragging = true;
+            lastX = e.clientX;
+            lastY = e.clientY;
+        });
+
+        canvas.addEventListener('mousemove', e => {
+            if (!isDragging) return;
+            cameraX -= (e.clientX - lastX);
+            cameraY -= (e.clientY - lastY);
+            lastX = e.clientX;
+            lastY = e.clientY;
+            
+            const maxX = WORLD_W * GRID - canvas.width;
+            const maxY = WORLD_H * GRID - canvas.height;
+            cameraX = Math.max(0, Math.min(cameraX, maxX));
+            cameraY = Math.max(0, Math.min(cameraY, maxY));
+        });
+
+        canvas.addEventListener('mouseup', () => isDragging = false);
+        canvas.addEventListener('mouseleave', () => isDragging = false);
+
+        // Place Building
+        canvas.addEventListener('click', e => {
+            if (!placing) return;
+            const rect = canvas.getBoundingClientRect();
+            const mx = e.clientX - rect.left + cameraX;
+            const my = e.clientY - rect.top + cameraY;
+            const bx = Math.floor(mx / GRID);
+            const by = Math.floor(my / GRID);
+
+            if (bx < 0 || bx >= WORLD_W || by < 0 || by >= WORLD_H) return;
+            if (buildings.some(b => b.x === bx && b.y === by) || map[by][bx] === 1) {
+                log("❌ Hindi pwede dito!");
+                return;
+            }
+
+            let cost = {food:0, wood:0, stone:0};
+            if (placing === 'house') cost.food = 80;
+            else if (placing === 'farm') cost.food = 120;
+            else if (placing === 'townhall') cost.stone = 200;
+            else if (placing === 'barracks') cost.wood = 180;
+
+            if (resources.food >= cost.food && resources.wood >= cost.wood && resources.stone >= cost.stone) {
+                resources.food -= cost.food;
+                resources.wood -= cost.wood;
+                resources.stone -= cost.stone;
+                buildings.push({type: placing, x: bx, y: by});
+                updateUI();
+                log(`✅ Napatayo ang ${placing.toUpperCase()}!`);
+                placing = null;
+            } else {
+                log("❌ Kulang ang yaman!");
+            }
+        });
+
+        function startPlacing(type) { placing = type; log(`📍 Piliin ang lugar para sa ${type}...`); }
+
+        function trainTroops(n) {
+            const c = n * 10;
+            if (resources.food >= c) {
+                resources.food -= c;
+                troops += n;
+                updateUI();
+                log(`⚔️ Nasanay ${n} Mandirigma!`);
+            } else log("❌ Kulang pagkain!");
+        }
+
+        function attackBarbarians() {
+            if (troops < 6) { log("❌ Kulang ang mandirigma!"); return; }
+            const win = Math.random() > 0.45;
+            const loot = Math.floor(Math.random() * 150) + 60;
+            if (win) {
+                resources.gold += loot;
+                resources.food += Math.floor(loot/2);
+                troops = Math.max(4, troops - 3);
+                log(`🏆 Tagumpay! Nakakuha ng ${loot} Ginto`);
+            } else {
+                troops = Math.max(2, troops - 8);
+                log("💥 Natalo sa laban...");
+            }
+            updateUI();
+        }
+
+        // Resource production
+        setInterval(() => {
+            const farms = buildings.filter(b => b.type === 'farm').length;
+            const halls = buildings.filter(b => b.type === 'townhall').length;
+            resources.food += farms * 7;
+            resources.wood += halls * 5;
+            resources.stone += halls * 3;
+            updateUI();
+        }, 2800);
+
+        updateUI();
+        gameLoop();
+        log("🌴 Welcome to Tribes of Malaya!");
+        log("🖱️ I-drag ang mapa para mag-explore");
+    </script>
+</body>
+</html>
